@@ -16,6 +16,20 @@ package grails.plugin.databasemigration
 
 import grails.util.GrailsUtil
 import groovy.sql.Sql
+import liquibase.changelog.ChangeLogIterator
+import liquibase.changelog.ChangeSet
+import liquibase.changelog.DatabaseChangeLog
+import liquibase.changelog.filter.ContextChangeSetFilter
+import liquibase.changelog.filter.DbmsChangeSetFilter
+import liquibase.changelog.filter.ShouldRunChangeSetFilter
+import liquibase.changelog.visitor.ListVisitor
+import liquibase.changelog.visitor.UpdateVisitor
+import liquibase.exception.LiquibaseException
+import liquibase.exception.LockException
+import liquibase.lockservice.LockService
+import liquibase.parser.ChangeLogParser
+import liquibase.parser.ChangeLogParserFactory
+import liquibase.util.StringUtils
 import java.sql.ResultSet
 import liquibase.Liquibase
 import liquibase.database.Database
@@ -34,7 +48,7 @@ class MigrationRunner {
 	protected static Logger LOG = LoggerFactory.getLogger(this)
 
 	static void autoRun(migrationCallbacks = null) {
-		def dataSourceConfigs = grails.plugin.databasemigration.MigrationUtils.getDataSourceConfigs()
+		def dataSourceConfigs = MigrationUtils.getDataSourceConfigs()
 		dataSourceConfigs.dataSource = MigrationUtils.application.config.dataSource
 		
 		for (configAndName in dataSourceConfigs) {
@@ -42,50 +56,38 @@ class MigrationRunner {
 			ConfigObject configObject = configAndName.value
 			
 			if (!MigrationUtils.canAutoMigrate(dsConfigName)) {
-				LOG.debug "Not running auto migrate for DataSource '$dsConfigName'"
+				LOG.warn "Not running auto migrate for DataSource '$dsConfigName'"
 				continue
 			}
 
 			def config = MigrationUtils.getConfig(dsConfigName)
 
 			if (!config.updateOnStart) {
-				LOG.debug "updateOnStart disabled for $dsConfigName; not running migrations"
+				LOG.info "updateOnStart disabled for $dsConfigName; not running migrations"
 				continue
 			}
 
-			LOG.info "updateOnStart enabled for '$dsConfigName'"
 			try {
 				MigrationUtils.executeInSession(dsConfigName) {
+                    def execTime = System.currentTimeMillis()
 					Database database
 					if(config.multiSchema){
 						database = MigrationUtils.getDatabase(null, dsConfigName)
-						
+						ResultSet resultSet = database.connection.metaData.schemas
 						List schemas = []
-						if(config.multiSchemaQuery){
-							new Sql(database.connection.wrappedConnection).eachRow(config.multiSchemaQuery){ row ->
-								String schema = row[0]
-								if(schema ==~ config.multiSchemaPattern || schema in config.multiSchemaList){ schemas << schema }
-							}
+						while (resultSet.next()) {
+							String schema = resultSet.getString(1)
+							if(schema ==~ config.multiSchemaPattern || schema in config.multiSchemaList){ schemas << schema } 
 						}
-						else {
-							ResultSet resultSet = database.connection.metaData.schemas
-							while (resultSet.next()) {
-								String schema = resultSet.getString(1)
-								if(schema ==~ config.multiSchemaPattern || schema in config.multiSchemaList){ schemas << schema } 
-							}
-						}
-						
+
 						LOG.info "Found ${schemas.size()} schemas to update"
-						
-						schemas.each{ schema ->
-							database = MigrationUtils.getDatabase(schema, dsConfigName)
-							runMigrations(dsConfigName, schema, config, database, migrationCallbacks)
-						}
+
+                        runMigrations(dsConfigName, schemas, config, migrationCallbacks)
 					}
 					else{
-						database = MigrationUtils.getDatabase(config.updateOnStartDefaultSchema ?: null, dsConfigName)
-						runMigrations(dsConfigName, config.updateOnStartDefaultSchema ?: null, config, database, migrationCallbacks)
+                        runMigrations(dsConfigName,  [ config.updateOnStartDefaultSchema ?: null] , config, migrationCallbacks)
 					}
+                    LOG.info "Migration '$dsConfigName' ${(System.currentTimeMillis()-execTime)} ms"
 				}
 			}
 			catch (e) {
@@ -95,47 +97,118 @@ class MigrationRunner {
 		}
 	}
 	
-	static void runMigrations(dsConfigName, schema, config, database, migrationCallbacks = null){
-		if (config.dropOnStart) {
-			LOG.warn "Dropping tables..."
-			MigrationUtils.getLiquibase(database).dropAll()
-		}
+	static void runMigrations(dsConfigName, schemas, config, migrationCallbacks = null){
+        //get changeLog once (skip repeat per schema)
+        Database database = MigrationUtils.getDatabase(config.updateOnStartDefaultSchema ?: null, dsConfigName)
+        def changeLogs = getChangeLogs(database,config)
 
-		Map<String, Liquibase> liquibases = [:]
-		for (String changelogName in config.updateOnStartFileNames) {
-			Liquibase liquibase = MigrationUtils.getLiquibase(database, changelogName)
-			if (liquibase.listUnrunChangeSets(config.updateOnStartContexts ?: config.contexts ?: null)) {
-				liquibases[changelogName] = liquibase
-			}
-		}
+        schemas.each { schema ->
 
-		if (liquibases) {
-			LOG.info "Migrations detected for '$dsConfigName${schema ? '.'+schema : ''}': ${liquibases.keySet()}"
+            if (config.dropOnStart) {
+                LOG.warn "Dropping tables..."
+                MigrationUtils.getLiquibase(database).dropAll()
+            }
 
-			try {
-				migrationCallbacks?.beforeStartMigration database
-			}
-			catch (MissingMethodException ignored) {}
+            Map<String, Liquibase> liquibases = [:]
+            for (String changelogName in config.updateOnStartFileNames) {
+                //change database to use schema
+                Liquibase liquibase = MigrationUtils.getLiquibase( MigrationUtils.getDatabase(schema, dsConfigName), changelogName)
 
-			liquibases.each { String changelogName, Liquibase liquibase ->
-				LOG.info "Running script '$changelogName'"
+                //changeLog parameters must be same as liquibase parameters (connection, schema, others)
+                //but needs also parameters from parser (properties from changeLog file)
+                DatabaseChangeLog changeLog = changeLogs[changelogName]
 
-				try {
-					migrationCallbacks?.onStartMigration database, liquibase, changelogName
-				}
-				catch (MissingMethodException ignored) {}
 
-				liquibase.update config.updateOnStartContexts ?: config.contexts ?: null
-			}
+                changeLog.changeLogParameters.changeLogParameters.each {
+                    if(it.key.equalsIgnoreCase("database.liquibaseSchemaName")){
+                        it.value = liquibase.getChangeLogParameters().getValue("database.liquibaseSchemaName")
+                    }
 
-			try {
-				migrationCallbacks?.afterMigrations database
-			}
-			catch (MissingMethodException ignored) {}
-		}
-		else {
-			LOG.info "No migrations to run for '$dsConfigName${schema ? '.'+schema : ''}'"
-		}
+                    if(it.key.equalsIgnoreCase("database.defaultSchemaName")){
+                        it.value = liquibase.getChangeLogParameters().getValue("database.defaultSchemaName")
+                    }
+                }
+                changeLog.changeLogParameters.currentDatabase = liquibase.changeLogParameters.currentDatabase
+                changeLog.changeLogParameters.expressionExpander = liquibase.changeLogParameters.expressionExpander
+                changeLog.changeLogParameters.currentContexts = liquibase.changeLogParameters.currentContexts
+
+                if (listUnrunChangeSets(liquibase, config.updateOnStartContexts ?: config.contexts ?: null, changeLog)) {
+                    liquibases[changelogName] = liquibase
+                }
+            }
+
+            if (liquibases) {
+                LOG.info "Migrations detected for '$dsConfigName${schema ? '.' + schema : ''}': ${liquibases.keySet()}"
+                database = MigrationUtils.getDatabase(schema, dsConfigName)
+                try {
+                    migrationCallbacks?.beforeStartMigration database
+                }
+                catch (MissingMethodException ignored) {
+                }
+
+                liquibases.each { String changelogName, Liquibase liquibase ->
+                    LOG.info "Running script '$changelogName'"
+
+                    try {
+                        migrationCallbacks?.onStartMigration database, liquibase, changelogName
+                    }
+                    catch (MissingMethodException ignored) {
+                    }
+
+                    liquibaseUpdate(config.updateOnStartContexts ?: config.contexts ?: null , liquibase , changeLogs[changelogName])
+                }
+
+                try {
+                    migrationCallbacks?.afterMigrations database
+                }
+                catch (MissingMethodException ignored) {
+                }
+            } else {
+                LOG.info "No migrations to run for '$dsConfigName${schema ? '.' + schema : ''}'"
+            }
+        }
 	}
-	
+
+    private static Map<String,DatabaseChangeLog> getChangeLogs( database, config){
+        def contexts = config.updateOnStartContexts ?: config.contexts ?: null
+        def changeLogs=[:]
+        for (String changelogName in config.updateOnStartFileNames) {
+            Liquibase liquibase = MigrationUtils.getLiquibase(database, changelogName)
+            liquibase.changeLogParameters.setContexts(StringUtils.splitAndTrim(contexts, ","));
+            ChangeLogParser parser = ChangeLogParserFactory.instance.getParser(liquibase.changeLogFile, liquibase.resourceAccessor)
+            DatabaseChangeLog changeLog = parser.parse(liquibase.changeLogFile, liquibase.changeLogParameters, liquibase.resourceAccessor);
+            changeLogs << [(changelogName):changeLog]
+        }
+        return changeLogs
+    }
+
+    //liquibase.listUnrunChangeSets will parse migrations. this method skips 'parse'
+    private static List<ChangeSet> listUnrunChangeSets(Liquibase liquibase, String contexts, DatabaseChangeLog changeLog) throws LiquibaseException {
+        contexts = StringUtils.trimToNull(contexts);
+        liquibase.changeLogParameters.setContexts(StringUtils.splitAndTrim(contexts, ","));
+        changeLog.validate(liquibase.database, contexts);
+        ChangeLogIterator logIterator = liquibase.getStandardChangelogIterator(contexts, changeLog);
+        ListVisitor visitor = new ListVisitor();
+        logIterator.run(visitor, liquibase.database);
+        return visitor.getSeenChangeSets();
+    }
+
+    //liquibase.update will parse migrations again. this method skips 'parse'
+    private static void liquibaseUpdate( contexts, liquibase, changeLog) throws LiquibaseException {
+        contexts = StringUtils.trimToNull(contexts);
+        LockService lockService = LockService.getInstance(liquibase.database);
+        lockService.waitForLock();
+
+        try {
+            liquibase.checkDatabaseChangeLogTable(true, changeLog, contexts);
+            ChangeLogIterator changeLogIterator = new ChangeLogIterator(changeLog, new ShouldRunChangeSetFilter(liquibase.database), new ContextChangeSetFilter(contexts), new DbmsChangeSetFilter(liquibase.database));
+            changeLogIterator.run(new UpdateVisitor(liquibase.database), liquibase.database);
+        } finally {
+            try {
+                lockService.releaseLock();
+            } catch (LockException e) {
+                LOG.error("Could not release lock", e);
+            }
+        }
+    }
 }
