@@ -23,7 +23,7 @@ import liquibase.sql.UnparsedSql
 import liquibase.sqlgenerator.SqlGenerator
 import liquibase.sqlgenerator.SqlGeneratorChain
 import liquibase.sqlgenerator.core.CreateTableGenerator
-import liquibase.statement.SqlStatement
+import liquibase.statement.core.CreateTableStatement
 
 /**
  * Adds 'ENGINE=InnoDB' if using an InnoDB dialect.<p/>
@@ -34,11 +34,11 @@ import liquibase.statement.SqlStatement
  *
  * @author <a href='mailto:burt@burtbeckwith.com'>Burt Beckwith</a>
  */
-class MysqlAwareCreateTableGenerator implements SqlGenerator {
+class MysqlAwareCreateTableGenerator implements SqlGenerator<CreateTableStatement> {
 
 	protected CreateTableGenerator _super = new CreateTableGenerator()
 
-	Sql[] generateSql(SqlStatement statement, Database database, SqlGeneratorChain chain) {
+	Sql[] generateSql(CreateTableStatement statement, Database database, SqlGeneratorChain chain) {
 		Sql[] statements = _super.generateSql(statement, database, chain)
 		if (statements && statements.length == 1 && (statements[0] instanceof UnparsedSql)) {
 			statements = updateSql(statements, database)
@@ -53,7 +53,7 @@ class MysqlAwareCreateTableGenerator implements SqlGenerator {
 		[newSql] as Sql[]
 	}
 
-	ValidationErrors validate(SqlStatement statement, Database database, SqlGeneratorChain chain) {
+	ValidationErrors validate(CreateTableStatement statement, Database database, SqlGeneratorChain chain) {
 		_super.validate statement, database, chain
 	}
 
@@ -61,7 +61,7 @@ class MysqlAwareCreateTableGenerator implements SqlGenerator {
 		_super.priority
 	}
 
-	boolean supports(SqlStatement statement, Database database) {
+	boolean supports(CreateTableStatement statement, Database database) {
 		_super.supports statement, database
 	}
 
@@ -69,7 +69,7 @@ class MysqlAwareCreateTableGenerator implements SqlGenerator {
 		_super.requiresUpdatedDatabaseMetadata database
 	}
 
-	Warnings warn(SqlStatement statementType, Database database, SqlGeneratorChain chain) {
+	Warnings warn(CreateTableStatement statementType, Database database, SqlGeneratorChain chain) {
 		_super.warn statementType, database, chain
 	}
 }
