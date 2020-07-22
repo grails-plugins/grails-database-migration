@@ -20,6 +20,7 @@ There are a few configuration options for the plugin. All configurations are pre
 |autoMigrateScripts |['RunApp'] |the scripts when running auto-migrate. Useful to run auto-migrate during test phase with: ['RunApp', 'TestApp']
 |excludeObjects |none |A comma-delimited list of database object names to ignore while performing a dbm-gorm-diff or dbm-generate-gorm-changelog
 |includeObjects |none |A comma-delimited list of database object names to look for while performing a dbm-gorm-diff or dbm-generate-gorm-changelog
+|suppressFields |none |A comma-delimited list of database object fields to suppress when looking for differences while performing a dbm-gorm-diff or dbm-generate-gorm-changelog (in the format type:field)
 |databaseChangeLogTableName |'databasechangelog' |the Liquibase changelog record table name
 |databaseChangeLogLockTableName |'databasechangeloglock' |the Liquibase lock table name
 |==================================
@@ -51,4 +52,11 @@ The configuration for all data sources with same db schema would be:
 ----
 grails.plugin.databasemigration.updateAllOnStart = true
 grails.plugin.databasemigration.changelogFileName = changelog.groovy
+----
+
+*Suppress Fields:*
+
+When comparing different types of databases (such as Gorm to Oracle), liquibase can detect changes that aren't real.  For example, Oracle databases track if Foreign Keys are validatable, but that field causes a difference when compared to any other type of database.  To prevent these differences you can use the suppressFields config option:
+----
+grails.plugin.databasemigration.suppressFields = [ "ForeignKey:validate" ]
 ----
