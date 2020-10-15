@@ -21,9 +21,9 @@ import liquibase.database.Database
 import liquibase.exception.DatabaseException
 import liquibase.exception.LiquibaseException
 import liquibase.integration.spring.SpringLiquibase
-import liquibase.resource.ClassLoaderResourceAccessor
 import liquibase.resource.ResourceAccessor
 import org.springframework.context.ApplicationContext
+import org.springframework.core.io.DefaultResourceLoader
 
 import java.sql.Connection
 
@@ -42,11 +42,12 @@ class GrailsLiquibase extends SpringLiquibase {
 
     GrailsLiquibase(ApplicationContext applicationContext) {
         this.applicationContext = applicationContext
+        this.resourceLoader = new DefaultResourceLoader()
     }
 
     @Override
     protected Liquibase createLiquibase(Connection connection) throws LiquibaseException {
-        Liquibase liquibase = new Liquibase(getChangeLog(), new ClassLoaderResourceAccessor(), createDatabase
+        Liquibase liquibase = new Liquibase(getChangeLog(), createResourceOpener(), createDatabase
                 (connection, null))
         liquibase.setIgnoreClasspathPrefix(isIgnoreClasspathPrefix())
         if (parameters != null) {
