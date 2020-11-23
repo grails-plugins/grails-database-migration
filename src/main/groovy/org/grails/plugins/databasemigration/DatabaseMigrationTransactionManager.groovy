@@ -26,11 +26,15 @@ class DatabaseMigrationTransactionManager {
      */
     PlatformTransactionManager getTransactionManager() {
         String dataSource = this.dataSource ?: "dataSource"
-        String beanName = "transactionManager"
+        def tManager
+        def hibernateDatastore = applicationContext.getBean('hibernateDatastore')
         if (dataSource != "dataSource") {
-            beanName += "_${dataSource}"
+            tManager = hibernateDatastore.datastoresByConnectionSource.get(dataSource).transactionManager
         }
-        applicationContext.getBean(beanName, PlatformTransactionManager)
+        else {
+            tManager = hibernateDatastore.transactionManager
+        }
+        return tManager
     }
 
     /**

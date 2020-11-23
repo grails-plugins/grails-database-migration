@@ -78,10 +78,9 @@ trait ApplicationContextDatabaseMigrationCommand implements DatabaseMigrationCom
     }
 
     private Database createGormDatabase(ConfigurableApplicationContext applicationContext, String dataSource) {
-        String dataSourceName = getDataSourceName(dataSource)
         String sessionFactoryName = "sessionFactory"
         if (!isDefaultDataSource(dataSource)) {
-            sessionFactoryName = sessionFactoryName + '_' + dataSourceName
+            sessionFactoryName = sessionFactoryName + '_' + dataSource
         }
 
         def serviceRegistry = applicationContext.getBean(sessionFactoryName, SessionFactoryImplementor).serviceRegistry.parentServiceRegistry

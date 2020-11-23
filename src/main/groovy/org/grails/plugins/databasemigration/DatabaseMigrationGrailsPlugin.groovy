@@ -19,6 +19,7 @@ import grails.plugins.Plugin
 import liquibase.parser.ChangeLogParser
 import liquibase.parser.ChangeLogParserFactory
 import liquibase.servicelocator.ServiceLocator
+import org.grails.datastore.mapping.core.connections.ConnectionSource
 import org.grails.plugins.databasemigration.liquibase.GormDatabase
 import org.grails.plugins.databasemigration.liquibase.GrailsLiquibase
 import org.grails.plugins.databasemigration.liquibase.GroovyChangeLogParser
@@ -69,7 +70,10 @@ class DatabaseMigrationGrailsPlugin extends Plugin {
                     return
                 }
             } else {
-                configPrefix = CONFIG_MAIN_PREFIX
+                //Use default settings just in case that specific datasource settings does not exists
+                if ( !config.containsProperty("${configPrefix}") ) {
+                    configPrefix = CONFIG_MAIN_PREFIX
+                }
             }
 
             new DatabaseMigrationTransactionManager(applicationContext, dataSourceName).withTransaction {
@@ -89,7 +93,11 @@ class DatabaseMigrationGrailsPlugin extends Plugin {
     }
 
     private def getDataSourceBean(ApplicationContext applicationContext, String dataSourceName) {
-        applicationContext.getBean(getDataSourceName(dataSourceName), DataSource)
+        def dsName = dataSourceName
+        if ( isDefaultDataSource(dsName) ) {
+            dsName = ConnectionSource.DEFAULT
+        }
+        return applicationContext.getBean('hibernateDatastore').connectionSources.connectionSourceMap.get(dsName).dataSource
     }
 
     private void configureLiquibase() {
@@ -102,14 +110,9 @@ class DatabaseMigrationGrailsPlugin extends Plugin {
     }
 
     private Set<String> getDataSourceNames() {
-        def dataSources = config.getProperty('dataSources', Map, [:])
-        if (!dataSources) {
-            return ['dataSource']
-        }
-        Set<String> dataSourceNames = dataSources.keySet()
-        if (!dataSourceNames.contains('dataSource')) {
-            dataSourceNames = ['dataSource'] + dataSourceNames
-        }
+        Set<String> dataSourceNames = grailsApplication.getMainContext().getBean('hibernateDatastore').connectionSources.connectionSourceMap.keySet().toSet()
+        dataSourceNames.remove( ConnectionSource.DEFAULT )
+        dataSourceNames.add( 'dataSource' )
         dataSourceNames
     }
 
