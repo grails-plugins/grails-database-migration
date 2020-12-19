@@ -16,6 +16,8 @@
 package org.grails.plugins.databasemigration.liquibase
 
 import groovy.transform.CompileStatic
+import liquibase.Contexts
+import liquibase.LabelExpression
 import liquibase.Liquibase
 import liquibase.database.Database
 import liquibase.exception.DatabaseException
@@ -87,9 +89,18 @@ class GrailsLiquibase extends SpringLiquibase {
         def database = liquibase.database
         def migrationCallbacks = applicationContext.getBean('migrationCallbacks')
 
+
+        if (!liquibase.listUnrunChangeSets(new Contexts(getContexts()), new LabelExpression(getLabels()))) {
+            log.info("No migrations to run for ${liquibase.database.connection.catalog}")
+            return
+        }
+
+        log.info("Migrations detected for ${liquibase.database.connection.catalog}")
+
         if (migrationCallbacks.metaClass.respondsTo(migrationCallbacks, 'beforeStartMigration')) {
             migrationCallbacks.invokeMethod('beforeStartMigration', [database] as Object[])
         }
+
         if (migrationCallbacks.metaClass.respondsTo(migrationCallbacks, 'onStartMigration')) {
             migrationCallbacks.invokeMethod('onStartMigration', [database, liquibase, changeLog] as Object[])
         }
